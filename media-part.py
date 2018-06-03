@@ -103,7 +103,7 @@ class Partition:
             path_suffix = file_name[len(common_prefix) + 1:]
             return os.path.join(self.dest_dir, str(self.partition_id), path_suffix)
             
-    def ingest(self, file_name):
+    def _ingest(self, file_name):
         if not self.dir_created and not self.dry_run:
             os.mkdir(os.path.join(self.dest_dir, str(self.year)))
             self.dir_created = True
@@ -114,7 +114,7 @@ class Partition:
 
         
     @staticmethod
-    def get_partition(file_name):
+    def _get_partition(file_name):
         exif = read_exif(file_name)
         for x in ['DateTimeOriginal','DateTimeDigitized', 'DateTime']:
             if x in exif:
@@ -131,13 +131,13 @@ class Partition:
     @staticmethod
     def handle_file(file_name, src_dir, dest_dir, log_file, use_move, dry_run, flatten):
 
-        part = Partition.get_partition(file_name)
+        part = Partition._get_partition(file_name)
 
         # if first time, do partition set-up
         if part not in Partition.partitions:
             Partition.partitions[part] = Partition(part, src_dir, dest_dir, log_file, use_move, dry_run, flatten)
 
-        Partition.partitions[part].ingest(file_name)
+        Partition.partitions[part]._ingest(file_name)
 
 
 def file_size_cmp(path, min_kb):
