@@ -27,7 +27,10 @@ DEFAULT_PARALLEL_WORKERS=10
 WORK_BUFFER_SIZE=10000
 EST_MAX_FILES_PER_YEAR=50000 
 
-#TODO: set-up regular error logging as well to console
+LOG_HANDLER = logging.StreamHandler(stream=sys.stderr)
+LOG = logging.getLogger(sys.argv[0])
+LOG.setLevel(logging.INFO)
+LOG.addHandler(LOG_HANDLER)
 
 
 # Todo handle exif from video files
@@ -109,7 +112,9 @@ class Partition:
             self.dir_created = True
 
         dest_file_name = self._dest_path(file_name)
-            
+
+        #TODO: Make sure we can handle filenames with spaces, etc.
+        
         CMD_LOG.info('Partition %s, cp %s %s' % (self.partition_id, file_name, dest_file_name))
 
         
@@ -202,17 +207,19 @@ def get_args():
     return args
 
 
-def parallel_task():
+def parallel_task(progress):
 
     while True:
         src_file = work_queue.get()
         try:
             Partition.handle_file(src_file, args.src_dir, args.dest_dir, 'some_log_file_thing', args.use_move, \
                              not args.no_dry_run, args.flatten_subdirectories)
+        except:
+            LOG.exception("Unexpected error: %s", sys.exc_info()[0])
         finally:
             work_queue.task_done()
-            progress_bar.set_postfix(file=os.path.basename(src_file), refresh=False)
-            progress_bar.update(1)
+            progress.set_postfix(file=os.path.basename(src_file), refresh=False)
+            progress.update(1)
 
 if __name__ == '__main__':
 
@@ -224,11 +231,6 @@ if __name__ == '__main__':
     CMD_LOG.setLevel(logging.INFO)
     CMD_LOG.addHandler(CMD_HANDLER)
     
-    work_queue = Queue.Queue(WORK_BUFFER_SIZE)
-    for i in range(args.num_workers):
-        t = Thread(target=parallel_task)
-        t.daemon = True
-        t.start()
 
     # walk the list once to count for our progress bar total   
     paths = generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)
@@ -236,7 +238,13 @@ if __name__ == '__main__':
     for f in paths:
         total_files += 1
 
-    progress_bar = tqdm(total=total_files, unit='Files', unit_scale=True)
+    progress_bar = tqdm(total=total_files, unit='Files', unit_scale=True)    
+        
+    work_queue = Queue.Queue(WORK_BUFFER_SIZE)
+    for i in range(args.num_workers):
+        t = Thread(target=lambda: parallel_task(progress_bar))
+        t.daemon = True
+        t.start()
         
     # this generator will feed the actual work    
     paths = generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)    
