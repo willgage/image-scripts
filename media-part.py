@@ -1,7 +1,6 @@
-# See multi-threading examples in https://stackoverflow.com/questions/16665367/why-doesnt-a-simple-python-producer-consumer-multi-threading-program-speed-up-b
-
 # See https://pypi.org/project/bloom-filter/
-# TODO: support video files
+
+#tqdm, hachoir_*, bloom_filter
 
 import argparse
 import fnmatch
@@ -15,40 +14,73 @@ import re
 
 from threading import Thread
 
-from PIL import Image
-from PIL.ExifTags import TAGS
+#from PIL import Image
+#from PIL.ExifTags import TAGS
 from bloom_filter import BloomFilter
 from tqdm import tqdm
 
+from hachoir_core.error import HachoirError
+from hachoir_core.cmd_line import unicodeFilename
+from hachoir_parser import createParser
+from hachoir_core.tools import makePrintable
+from hachoir_metadata import extractMetadata
+
+
 UNKNOWN_PARTITION=0
 DEFAULT_MIN_SIZE_KB=1000
-DEFAULT_FILE_EXTENSIONS='JPEG,JPG'
+DEFAULT_FILE_EXTENSIONS='BMP,CUR,EMF,ICO,GIF,JPG,JPEG,PCX,PNG,TGA,TIFF,WMF,XCF,MKV,WMV,MOV,AVI'
 DEFAULT_PARALLEL_WORKERS=10
+QUEUE_TIMEOUT_SEC=30
 WORK_BUFFER_SIZE=10000
 EST_MAX_FILES_PER_YEAR=50000 
 
-LOG_HANDLER = logging.StreamHandler(stream=sys.stderr)
+
+_log_handler = logging.StreamHandler(stream=sys.stderr)
+_formatter = logging.Formatter('[%(levelname)s] %(asctime)s - %(message)s')
+_log_handler.setFormatter(_formatter)
 LOG = logging.getLogger(sys.argv[0])
-LOG.setLevel(logging.INFO)
-LOG.addHandler(LOG_HANDLER)
+LOG.setLevel(logging.DEBUG)
+LOG.addHandler(_log_handler)
 
 
 # Todo handle exif from video files
-def read_exif(file_name):
-    i = Image.open(file_name)
-    try:
-        if 'exif' in i.info:
-            exif = {}
-            for tag, value in i._getexif().items():
-                d = TAGS.get(tag, tag)
-                exif[d] = str(value)
+#def read_exif(file_name):
+#    i = Image.open(file_name)
+#    try:
+#        if 'exif' in i.info:
+#            exif = {}
+#            for tag, value in i._getexif().items():
+#                d = TAGS.get(tag, tag)
+#                exif[d] = str(value)
+#
+#            return exif
+#        else:
+#            return {}
+#    finally:
+#        i.close()
+#
 
+def read_exif_hachoir(file_name):
+
+    try:
+
+        filename, realname = unicodeFilename(file_name), file_name
+        parser = createParser(filename, realname)
+        metadata = extractMetadata(parser)
+        # print metadata
+        
+        if metadata.has('creation_date'):
+            exif = {}
+            exif['creation_date'] = str(metadata.get('creation_date'))
             return exif
         else:
-            return {}
-    finally:
-        i.close()
+            LOG.warn('File %s did not have creation_date' % file_name)
 
+        return {}
+
+    except HachoirError, err:
+        LOG.exception("Metadata extraction error: %s", unicode(err))
+        
 
 EXIF_YEAR_PTRN = re.compile('^\d+:\d+:\d+.*$')
 # Note: this pattern will only work for the previous and current millenium
@@ -120,8 +152,8 @@ class Partition:
         
     @staticmethod
     def _get_partition(file_name):
-        exif = read_exif(file_name)
-        for x in ['DateTimeOriginal','DateTimeDigitized', 'DateTime']:
+        exif = read_exif_hachoir(file_name)
+        for x in ['creation_date', 'DateTimeOriginal','DateTimeDigitized', 'DateTime']:
             if x in exif:
                 p = parse_exif_year(exif[x])
                 if p:
@@ -161,6 +193,8 @@ def generate_src_paths(root_dir, included_extensions, min_kb):
                 candidate_path = os.path.join(root, filename)
                 if file_size_cmp(candidate_path, min_kb) > -1:
                     yield candidate_path
+                else:
+                    LOG.debug('Skipping file %s; size < %d kb' % (candidate_path, min_kb))
 
                     
 def is_subdir(lpath, rpath):
@@ -187,13 +221,13 @@ def validate_src_and_dest(src_path, dest_path, allow_overwrite):
                 
 def get_args():
     parser = argparse.ArgumentParser(description='''
-    Partition an image library into directories by year.
-    This program will look through SRC_DIR for image files, and copy (or move) them into a subdirectory of DEST_DIR, partitioned by year.  If the DEST_DIR/${YEAR} subdirectory does not yet exist, it will create the directory. 
+    Partition a media library into directories by year. Primarily designed with image / video libraries in mind.
+    This program will look through SRC_DIR for media files, and copy (or move) them into a subdirectory of DEST_DIR, partitioned by year.  If the DEST_DIR/${YEAR} subdirectory does not yet exist, it will create the directory.  The program first tries to read the EXIF metadata of the files, then if it cannot get a year from that, falls back on looking at the directory path to find a year.  If all else fails, it assigns the file to year 0.
     ''')
     parser.add_argument('src_dir', metavar='SRC_DIR', type=str, help='Root directory of library')
     parser.add_argument('dest_dir', metavar='DEST_DIR', type=str, help='Destination directory of partitioned libraries')
     parser.add_argument('--min-kb', type=int, default=DEFAULT_MIN_SIZE_KB, help='Minimum size of image to include in new library.  For example, can be used to eliminate thumbnails. Default value: %d' % DEFAULT_MIN_SIZE_KB)
-    parser.add_argument('--file-extensions', type=str, default=DEFAULT_FILE_EXTENSIONS, help='File extensions to include in library.  Default value: %s' % DEFAULT_FILE_EXTENSIONS)
+    parser.add_argument('--file-extensions', type=str, default=DEFAULT_FILE_EXTENSIONS, help='File extensions to include in library.  CSV list; case-insensitive. Default value: %s' % DEFAULT_FILE_EXTENSIONS)
     parser.add_argument('--use-move', action='store_true', help='Move files instead of copying them.  This is less safe, but sometimes warranted if you have space constraints.  Default value: False')
     parser.add_argument('--flatten-subdirectories', action='store_true', help='Flatten subdirectories by placing all files in a single directory per year.  Note: files from SRC_DIR which have duplicate filenames when the directories are flattened will always be given a unique filename.  Default value: False')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite files that exist in DEST_DIR before the program runs.  Default value: False')
@@ -210,10 +244,12 @@ def get_args():
 def parallel_task(progress):
 
     while True:
-        src_file = work_queue.get()
         try:
+            src_file = work_queue.get(True, QUEUE_TIMEOUT_SEC)
             Partition.handle_file(src_file, args.src_dir, args.dest_dir, 'some_log_file_thing', args.use_move, \
                              not args.no_dry_run, args.flatten_subdirectories)
+        except Queue.EMPTY:
+            LOG.error("No more files to process. Exiting.")
         except:
             LOG.exception("Unexpected error: %s", sys.exc_info()[0])
         finally:
@@ -247,8 +283,7 @@ if __name__ == '__main__':
         t.start()
         
     # this generator will feed the actual work    
-    paths = generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)    
-    
+    paths = generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)     
     for p in paths:
         work_queue.put(p)
 
