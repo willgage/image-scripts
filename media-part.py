@@ -14,11 +14,8 @@ import re
 
 from threading import Thread
 
-#from PIL import Image
-#from PIL.ExifTags import TAGS
 from bloom_filter import BloomFilter
 from tqdm import tqdm
-
 from hachoir_core.error import HachoirError
 from hachoir_core.cmd_line import unicodeFilename
 from hachoir_parser import createParser
@@ -42,23 +39,6 @@ LOG = logging.getLogger(sys.argv[0])
 LOG.setLevel(logging.DEBUG)
 LOG.addHandler(_log_handler)
 
-
-# Todo handle exif from video files
-#def read_exif(file_name):
-#    i = Image.open(file_name)
-#    try:
-#        if 'exif' in i.info:
-#            exif = {}
-#            for tag, value in i._getexif().items():
-#                d = TAGS.get(tag, tag)
-#                exif[d] = str(value)
-#
-#            return exif
-#        else:
-#            return {}
-#    finally:
-#        i.close()
-#
 
 def read_exif_hachoir(file_name):
 
@@ -146,18 +126,17 @@ class Partition:
         dest_file_name = self._dest_path(file_name)
 
         #TODO: Make sure we can handle filenames with spaces, etc.
-        
+        #TODO: actual file handling
         CMD_LOG.info('Partition %s, cp %s %s' % (self.partition_id, file_name, dest_file_name))
 
         
     @staticmethod
     def _get_partition(file_name):
         exif = read_exif_hachoir(file_name)
-        for x in ['creation_date', 'DateTimeOriginal','DateTimeDigitized', 'DateTime']:
-            if x in exif:
-                p = parse_exif_year(exif[x])
-                if p:
-                    return p
+        if 'creation_date' in exif:
+            p = parse_exif_year(exif['creation_date'])
+            if p:
+                return p
 
         path_year = parse_filename_year(file_name)
         if path_year:
@@ -248,7 +227,7 @@ def parallel_task(progress):
             src_file = work_queue.get(True, QUEUE_TIMEOUT_SEC)
             Partition.handle_file(src_file, args.src_dir, args.dest_dir, 'some_log_file_thing', args.use_move, \
                              not args.no_dry_run, args.flatten_subdirectories)
-        except Queue.EMPTY:
+        except Queue.Empty:
             LOG.error("No more files to process. Exiting.")
         except:
             LOG.exception("Unexpected error: %s", sys.exc_info()[0])
