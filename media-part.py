@@ -11,6 +11,8 @@ import sys
 import Queue
 import logging
 import re
+import datetime
+import shutil
 
 from threading import Thread
 
@@ -36,7 +38,7 @@ _log_handler = logging.StreamHandler(stream=sys.stderr)
 _formatter = logging.Formatter('[%(levelname)s] %(asctime)s - %(message)s')
 _log_handler.setFormatter(_formatter)
 LOG = logging.getLogger(sys.argv[0])
-LOG.setLevel(logging.DEBUG)
+LOG.setLevel(logging.ERROR)
 LOG.addHandler(_log_handler)
 
 
@@ -92,7 +94,6 @@ class Partition:
         self.use_move = use_move
         self.dry_run = dry_run
         self.flatten = flatten
-        self.dir_created = False
 
 
     def _dest_path(self, file_name):    
@@ -119,14 +120,15 @@ class Partition:
             return os.path.join(self.dest_dir, str(self.partition_id), path_suffix)
             
     def _ingest(self, file_name):
-        if not self.dir_created and not self.dry_run:
-            os.mkdir(os.path.join(self.dest_dir, str(self.year)))
-            self.dir_created = True
 
         dest_file_name = self._dest_path(file_name)
-
-        #TODO: Make sure we can handle filenames with spaces, etc.
-        #TODO: actual file handling
+        
+        if not self.dry_run:
+            dest_dir = os.path.dirname(dest_file_name)
+            if not os.path.isdir(dest_dir):
+                os.makedirs(dest_dir)
+            shutil.copy2(file_name, dest_file_name)
+            
         CMD_LOG.info('Partition %s, cp %s %s' % (self.partition_id, file_name, dest_file_name))
 
         
@@ -201,20 +203,19 @@ def validate_src_and_dest(src_path, dest_path, allow_overwrite):
 def get_args():
     parser = argparse.ArgumentParser(description='''
     Partition a media library into directories by year. Primarily designed with image / video libraries in mind.
-    This program will look through SRC_DIR for media files, and copy (or move) them into a subdirectory of DEST_DIR, partitioned by year.  If the DEST_DIR/${YEAR} subdirectory does not yet exist, it will create the directory.  The program first tries to read the EXIF metadata of the files, then if it cannot get a year from that, falls back on looking at the directory path to find a year.  If all else fails, it assigns the file to year 0.
+    This program will look through SRC_DIR for media files, and copy them into a subdirectory of DEST_DIR, partitioned by year.  If the DEST_DIR/${YEAR} subdirectory does not yet exist, it will create the directory.  The program first tries to read the EXIF metadata of the files, then if it cannot get a year from that, falls back on looking at the directory path to find a year.  If all else fails, it assigns the file to year 0.
     ''')
     parser.add_argument('src_dir', metavar='SRC_DIR', type=str, help='Root directory of library')
     parser.add_argument('dest_dir', metavar='DEST_DIR', type=str, help='Destination directory of partitioned libraries')
     parser.add_argument('--min-kb', type=int, default=DEFAULT_MIN_SIZE_KB, help='Minimum size of image to include in new library.  For example, can be used to eliminate thumbnails. Default value: %d' % DEFAULT_MIN_SIZE_KB)
     parser.add_argument('--file-extensions', type=str, default=DEFAULT_FILE_EXTENSIONS, help='File extensions to include in library.  CSV list; case-insensitive. Default value: %s' % DEFAULT_FILE_EXTENSIONS)
-    parser.add_argument('--use-move', action='store_true', help='Move files instead of copying them.  This is less safe, but sometimes warranted if you have space constraints.  Default value: False')
     parser.add_argument('--flatten-subdirectories', action='store_true', help='Flatten subdirectories by placing all files in a single directory per year.  Note: files from SRC_DIR which have duplicate filenames when the directories are flattened will always be given a unique filename.  Default value: False')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite files that exist in DEST_DIR before the program runs.  Default value: False')
     parser.add_argument('--no-dry-run', action='store_true', help='By defalt, we log expected changes, but do not actually make the changes.  If --no-dry-run is specified, changes will actually be executed.')
     parser.add_argument('--num-workers', type=int, default=DEFAULT_PARALLEL_WORKERS, help='Number of parallel threads to run.  Default value: %d' % DEFAULT_PARALLEL_WORKERS)
     
     args = parser.parse_args()
-
+    
     validate_src_and_dest(args.src_dir, args.dest_dir, args.overwrite)
     
     return args
@@ -240,7 +241,9 @@ if __name__ == '__main__':
 
     args = get_args()
 
-    CMD_HANDLER = logging.FileHandler('partition.log', mode='w')
+    time_str = datetime.datetime.now().isoformat()
+    
+    CMD_HANDLER = logging.FileHandler('partition_%s.log' % time_str, mode='w')
     CMD_HANDLER.setFormatter(logging.Formatter('%(message)s'))
     CMD_LOG = logging.getLogger('partition_command_log')
     CMD_LOG.setLevel(logging.INFO)
