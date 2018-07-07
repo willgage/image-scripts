@@ -2,6 +2,10 @@
 
 #tqdm, hachoir_*, bloom_filter
 
+#TODO: figure out why some files got lumped into 1980
+#TODO: can i suppress error logging from the metadata extraction?
+#TODO: setup.py support
+
 import argparse
 import fnmatch
 import os
@@ -85,13 +89,12 @@ class Partition:
 
     partitions = {}
     
-    def __init__(self, partition_id, src_dir, dest_dir, log_file, use_move, dry_run, flatten):
+    def __init__(self, partition_id, src_dir, dest_dir, log_file, dry_run, flatten):
         self.partition_id = partition_id
         self.log_file = log_file
         self.src_dir = src_dir
         self.dest_dir = dest_dir
         self.dest_bloom = BloomFilter(max_elements=EST_MAX_FILES_PER_YEAR)
-        self.use_move = use_move
         self.dry_run = dry_run
         self.flatten = flatten
 
@@ -147,23 +150,23 @@ class Partition:
         return UNKNOWN_PARTITION
     
     @staticmethod
-    def handle_file(file_name, src_dir, dest_dir, log_file, use_move, dry_run, flatten):
+    def handle_file(file_name, src_dir, dest_dir, log_file, dry_run, flatten):
 
         part = Partition._get_partition(file_name)
 
         # if first time, do partition set-up
         if part not in Partition.partitions:
-            Partition.partitions[part] = Partition(part, src_dir, dest_dir, log_file, use_move, dry_run, flatten)
+            Partition.partitions[part] = Partition(part, src_dir, dest_dir, log_file, dry_run, flatten)
 
         Partition.partitions[part]._ingest(file_name)
 
 
-def file_size_cmp(path, min_kb):
+def _file_size_cmp(path, min_kb):
     sz = os.stat(path).st_size
     sz_kb = sz / 1000
     return sz_kb - min_kb
         
-def generate_src_paths(root_dir, included_extensions, min_kb):
+def _generate_src_paths(root_dir, included_extensions, min_kb):
     extensions = [x.strip().lower() for x in included_extensions.split(',')] \
                  + [x.strip().upper() for x in included_extensions.split(',')]
     paths = []
@@ -172,24 +175,24 @@ def generate_src_paths(root_dir, included_extensions, min_kb):
             glob = '*.%s' % x
             for filename in fnmatch.filter(filenames, glob):
                 candidate_path = os.path.join(root, filename)
-                if file_size_cmp(candidate_path, min_kb) > -1:
+                if _file_size_cmp(candidate_path, min_kb) > -1:
                     yield candidate_path
                 else:
                     LOG.debug('Skipping file %s; size < %d kb' % (candidate_path, min_kb))
 
                     
-def is_subdir(lpath, rpath):
+def _is_subdir(lpath, rpath):
     l_real = os.path.realpath(lpath)
     r_real = os.path.realpath(rpath)
     return l_real == os.path.commonprefix([l_real, r_real])
 
 
-def validate_src_and_dest(src_path, dest_path, allow_overwrite):
+def _validate_src_and_dest(src_path, dest_path, allow_overwrite):
     valid = True
     if not os.path.isdir(src_path) or not os.path.isdir(dest_path):
         valid = False
         print('Both SRC_DIR and DEST_DIR must be valid directories')
-    elif is_subdir(src_path, dest_path):
+    elif _is_subdir(src_path, dest_path):
         valid = False
         print('DEST_DIR cannot be a subdirectory of SRC_DIR')
     elif not allow_overwrite and len(os.listdir(dest_path)) > 0:    
@@ -200,7 +203,7 @@ def validate_src_and_dest(src_path, dest_path, allow_overwrite):
         sys.exit(1)
 
                 
-def get_args():
+def _get_args():
     parser = argparse.ArgumentParser(description='''
     Partition a media library into directories by year. Primarily designed with image / video libraries in mind.
     This program will look through SRC_DIR for media files, and copy them into a subdirectory of DEST_DIR, partitioned by year.  If the DEST_DIR/${YEAR} subdirectory does not yet exist, it will create the directory.  The program first tries to read the EXIF metadata of the files, then if it cannot get a year from that, falls back on looking at the directory path to find a year.  If all else fails, it assigns the file to year 0.
@@ -216,17 +219,17 @@ def get_args():
     
     args = parser.parse_args()
     
-    validate_src_and_dest(args.src_dir, args.dest_dir, args.overwrite)
+    _validate_src_and_dest(args.src_dir, args.dest_dir, args.overwrite)
     
     return args
 
 
-def parallel_task(progress):
+def _parallel_task(progress):
 
     while True:
         try:
             src_file = work_queue.get(True, QUEUE_TIMEOUT_SEC)
-            Partition.handle_file(src_file, args.src_dir, args.dest_dir, 'some_log_file_thing', args.use_move, \
+            Partition.handle_file(src_file, args.src_dir, args.dest_dir, 'some_log_file_thing', \
                              not args.no_dry_run, args.flatten_subdirectories)
         except Queue.Empty:
             LOG.error("No more files to process. Exiting.")
@@ -237,9 +240,8 @@ def parallel_task(progress):
             progress.set_postfix(file=os.path.basename(src_file), refresh=False)
             progress.update(1)
 
-if __name__ == '__main__':
-
-    args = get_args()
+def main_func():
+    args = _get_args()
 
     time_str = datetime.datetime.now().isoformat()
     
@@ -251,7 +253,7 @@ if __name__ == '__main__':
     
 
     # walk the list once to count for our progress bar total   
-    paths = generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)
+    paths = _generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)
     total_files = 0
     for f in paths:
         total_files += 1
@@ -260,7 +262,7 @@ if __name__ == '__main__':
         
     work_queue = Queue.Queue(WORK_BUFFER_SIZE)
     for i in range(args.num_workers):
-        t = Thread(target=lambda: parallel_task(progress_bar))
+        t = Thread(target=lambda: _parallel_task(progress_bar))
         t.daemon = True
         t.start()
         
@@ -270,3 +272,8 @@ if __name__ == '__main__':
         work_queue.put(p)
 
     work_queue.join()   
+    
+            
+if __name__ == '__main__':
+
+    main_func()
