@@ -1,16 +1,13 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
-    name="media-partition",
+    name="mediapartition",
     version="0.1a0",
-    packages=find_packages(),
+    scripts=['mediapartition.py'],
     entry_points={
         'console_scripts': [
-            'mediapart = media-partition:main_func'
+            'mediapart=mediapartition:main_func'
         ]
     },
-
-    # Project uses reStructuredText, so ensure that the docutils get
-    # installed or upgraded on the target machine
     install_requires=['bloom-filter==1.3', 'tqdm==4.23.4', 'hachoir-core==1.3.3', 'hachoir-metadata==1.3.3', 'hachoir-parser==1.3.4']
 )
