@@ -1,10 +1,7 @@
 # See https://pypi.org/project/bloom-filter/
 
-#tqdm, hachoir_*, bloom_filter
-
 #TODO: figure out why some files got lumped into 1980
 #TODO: can i suppress error logging from the metadata extraction?
-#TODO: setup.py support
 
 import argparse
 import fnmatch
@@ -46,7 +43,7 @@ LOG.setLevel(logging.ERROR)
 LOG.addHandler(_log_handler)
 
 
-def read_exif_hachoir(file_name):
+def _read_exif_hachoir(file_name):
 
     try:
 
@@ -68,17 +65,17 @@ def read_exif_hachoir(file_name):
         LOG.exception("Metadata extraction error: %s", unicode(err))
         
 
-EXIF_YEAR_PTRN = re.compile('^\d+:\d+:\d+.*$')
+EXIF_YEAR_PTRN = re.compile('^\d+[:\-\/]\d+[:\-\/]\d+.*$')
 # Note: this pattern will only work for the previous and current millenium
 PATH_YEAR_PTRN = re.compile('^.*\%s([12]\d\d\d)\%s.*$' % (os.sep, os.sep))
         
-def parse_exif_year(date_str):
+def _parse_exif_year(date_str):
     x = date_str.strip()
     if EXIF_YEAR_PTRN.match(x):
-        return int(x.split(':')[0])
+        return int(re.split('[:\-\/]', x)[0])
     return None
 
-def parse_filename_year(file_name):
+def _parse_filename_year(file_name):
     m = PATH_YEAR_PTRN.match(file_name)
     if m:
         return int(m.group(1))
@@ -137,13 +134,13 @@ class Partition:
         
     @staticmethod
     def _get_partition(file_name):
-        exif = read_exif_hachoir(file_name)
+        exif = _read_exif_hachoir(file_name)
         if 'creation_date' in exif:
-            p = parse_exif_year(exif['creation_date'])
+            p = _parse_exif_year(exif['creation_date'])
             if p:
                 return p
 
-        path_year = parse_filename_year(file_name)
+        path_year = _parse_filename_year(file_name)
         if path_year:
             return path_year
                 
@@ -224,7 +221,7 @@ def _get_args():
     return args
 
 
-def _parallel_task(progress):
+def _parallel_task(work_queue, progress, args):
 
     while True:
         try:
@@ -241,6 +238,9 @@ def _parallel_task(progress):
             progress.update(1)
 
 def main_func():
+
+    global CMD_LOG
+    
     args = _get_args()
 
     time_str = datetime.datetime.now().isoformat()
@@ -262,12 +262,12 @@ def main_func():
         
     work_queue = Queue.Queue(WORK_BUFFER_SIZE)
     for i in range(args.num_workers):
-        t = Thread(target=lambda: _parallel_task(progress_bar))
+        t = Thread(target=lambda: _parallel_task(work_queue, progress_bar, args))
         t.daemon = True
         t.start()
         
     # this generator will feed the actual work    
-    paths = generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)     
+    paths = _generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)     
     for p in paths:
         work_queue.put(p)
 
