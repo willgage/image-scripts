@@ -27,7 +27,7 @@ from hachoir_metadata import extractMetadata
 
 
 UNKNOWN_PARTITION=0
-DEFAULT_MIN_SIZE_KB=1000
+DEFAULT_MIN_SIZE_KB=1
 DEFAULT_FILE_EXTENSIONS='BMP,CUR,EMF,ICO,GIF,JPG,JPEG,PCX,PNG,TGA,TIFF,WMF,XCF,MKV,WMV,MOV,AVI'
 DEFAULT_PARALLEL_WORKERS=10
 QUEUE_TIMEOUT_SEC=30
@@ -38,9 +38,18 @@ EST_MAX_FILES_PER_YEAR=50000
 _log_handler = logging.StreamHandler(stream=sys.stderr)
 _formatter = logging.Formatter('[%(levelname)s] %(asctime)s - %(message)s')
 _log_handler.setFormatter(_formatter)
+
 LOG = logging.getLogger(sys.argv[0])
 LOG.setLevel(logging.ERROR)
 LOG.addHandler(_log_handler)
+
+CMD_HANDLER = logging.FileHandler('partition_%s.log' % datetime.datetime.now().isoformat(), mode='w')
+CMD_HANDLER.setFormatter(logging.Formatter('%(message)s'))
+CMD_LOG = logging.getLogger('partition_command_log')
+CMD_LOG.setLevel(logging.INFO)
+CMD_LOG.addHandler(CMD_HANDLER)
+
+
 
 
 def _read_exif_hachoir(file_name):
@@ -211,7 +220,7 @@ def _get_args():
     parser.add_argument('--file-extensions', type=str, default=DEFAULT_FILE_EXTENSIONS, help='File extensions to include in library.  CSV list; case-insensitive. Default value: %s' % DEFAULT_FILE_EXTENSIONS)
     parser.add_argument('--flatten-subdirectories', action='store_true', help='Flatten subdirectories by placing all files in a single directory per year.  Note: files from SRC_DIR which have duplicate filenames when the directories are flattened will always be given a unique filename.  Default value: False')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite files that exist in DEST_DIR before the program runs.  Default value: False')
-    parser.add_argument('--no-dry-run', action='store_true', help='By defalt, we log expected changes, but do not actually make the changes.  If --no-dry-run is specified, changes will actually be executed.')
+    parser.add_argument('--no-dry-run', action='store_true', help='By default, we log expected changes, but do not actually make the changes.  If --no-dry-run is specified, changes will actually be executed.')
     parser.add_argument('--num-workers', type=int, default=DEFAULT_PARALLEL_WORKERS, help='Number of parallel threads to run.  Default value: %d' % DEFAULT_PARALLEL_WORKERS)
     
     args = parser.parse_args()
@@ -239,18 +248,7 @@ def _parallel_task(work_queue, progress, args):
 
 def main_func():
 
-    global CMD_LOG
-    
     args = _get_args()
-
-    time_str = datetime.datetime.now().isoformat()
-    
-    CMD_HANDLER = logging.FileHandler('partition_%s.log' % time_str, mode='w')
-    CMD_HANDLER.setFormatter(logging.Formatter('%(message)s'))
-    CMD_LOG = logging.getLogger('partition_command_log')
-    CMD_LOG.setLevel(logging.INFO)
-    CMD_LOG.addHandler(CMD_HANDLER)
-    
 
     # walk the list once to count for our progress bar total   
     paths = _generate_src_paths(args.src_dir, args.file_extensions, args.min_kb)
