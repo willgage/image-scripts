@@ -28,26 +28,31 @@ from hachoir_metadata import extractMetadata
 
 UNKNOWN_PARTITION=0
 DEFAULT_MIN_SIZE_KB=1
-DEFAULT_FILE_EXTENSIONS='BMP,CUR,EMF,ICO,GIF,JPG,JPEG,PCX,PNG,TGA,TIFF,WMF,XCF,MKV,WMV,MOV,AVI'
+DEFAULT_FILE_EXTENSIONS='BMP,CUR,EMF,ICO,GIF,JPG,JPEG,PCX,PNG,TGA,TIFF,TIF,WMF,XCF,MKV,WMV,MOV,AVI,M4V,CR2,MP4,3GP,MPG'
 DEFAULT_PARALLEL_WORKERS=10
 QUEUE_TIMEOUT_SEC=30
 WORK_BUFFER_SIZE=10000
 EST_MAX_FILES_PER_YEAR=50000 
 
+_start_time = datetime.datetime.now().isoformat()
 
-_log_handler = logging.StreamHandler(stream=sys.stderr)
 _formatter = logging.Formatter('[%(levelname)s] %(asctime)s - %(message)s')
-_log_handler.setFormatter(_formatter)
+_log_console_handler = logging.StreamHandler(stream=sys.stderr)
+_log_console_handler.setFormatter(_formatter)
+_log_file_handler = logging.FileHandler('partition_error_%s.log' % _start_time, mode='w')
+_log_file_handler.setFormatter(_formatter)
 
 LOG = logging.getLogger(sys.argv[0])
 LOG.setLevel(logging.ERROR)
-LOG.addHandler(_log_handler)
+LOG.addHandler(_log_console_handler)
+LOG.addHandler(_log_file_handler)
 
-CMD_HANDLER = logging.FileHandler('partition_%s.log' % datetime.datetime.now().isoformat(), mode='w')
-CMD_HANDLER.setFormatter(logging.Formatter('%(message)s'))
+_cmd_handler = logging.FileHandler('partition_command_%s.log' % _start_time, mode='w')
+_cmd_handler.setFormatter(logging.Formatter('%(message)s'))
+
 CMD_LOG = logging.getLogger('partition_command_log')
 CMD_LOG.setLevel(logging.INFO)
-CMD_LOG.addHandler(CMD_HANDLER)
+CMD_LOG.addHandler(_cmd_handler)
 
 
 
@@ -59,9 +64,8 @@ def _read_exif_hachoir(file_name):
         filename, realname = unicodeFilename(file_name), file_name
         parser = createParser(filename, realname)
         metadata = extractMetadata(parser)
-        # print metadata
         
-        if metadata.has('creation_date'):
+        if metadata and metadata.has('creation_date'):
             exif = {}
             exif['creation_date'] = str(metadata.get('creation_date'))
             return exif
@@ -75,7 +79,7 @@ def _read_exif_hachoir(file_name):
         
 
 EXIF_YEAR_PTRN = re.compile('^\d+[:\-\/]\d+[:\-\/]\d+.*$')
-# Note: this pattern will only work for the previous and current millenium
+# Note: this pattern will only work for years from 1000CE to 2999CE
 PATH_YEAR_PTRN = re.compile('^.*\%s([12]\d\d\d)\%s.*$' % (os.sep, os.sep))
         
 def _parse_exif_year(date_str):
@@ -94,6 +98,7 @@ def _parse_filename_year(file_name):
 class Partition:
 
     partitions = {}
+    created_dirs = set()
     
     def __init__(self, partition_id, src_dir, dest_dir, log_file, dry_run, flatten):
         self.partition_id = partition_id
@@ -103,7 +108,6 @@ class Partition:
         self.dest_bloom = BloomFilter(max_elements=EST_MAX_FILES_PER_YEAR)
         self.dry_run = dry_run
         self.flatten = flatten
-
 
     def _dest_path(self, file_name):    
         """
@@ -134,8 +138,12 @@ class Partition:
         
         if not self.dry_run:
             dest_dir = os.path.dirname(dest_file_name)
-            if not os.path.isdir(dest_dir):
-                os.makedirs(dest_dir)
+            
+            if not dest_dir in Partition.created_dirs:
+                Partition.created_dirs.add(dest_dir)
+                if not os.path.isdir(dest_dir):
+                    os.makedirs(dest_dir)
+                
             shutil.copy2(file_name, dest_file_name)
             
         CMD_LOG.info('Partition %s, cp %s %s' % (self.partition_id, file_name, dest_file_name))
@@ -240,12 +248,17 @@ def _parallel_task(work_queue, progress, args):
         except Queue.Empty:
             LOG.error("No more files to process. Exiting.")
         except:
-            LOG.exception("Unexpected error: %s", sys.exc_info()[0])
+            LOG.exception("Unexpected error processing file %s: %s", src_file, sys.exc_info()[0])
         finally:
             work_queue.task_done()
-            progress.set_postfix(file=os.path.basename(src_file), refresh=False)
+            
+        try:
+            #TODO: I think this may break with Unicode filenames
+            progress.set_postfix(file=unicodeFilename(os.path.basename(src_file)), refresh=False)
             progress.update(1)
-
+        except:
+            LOG.exception("Error updating progress bar: %s", sys.exc_info()[0])
+            
 def main_func():
 
     args = _get_args()
