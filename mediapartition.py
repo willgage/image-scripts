@@ -1,7 +1,4 @@
-# See https://pypi.org/project/bloom-filter/
-
-#TODO: figure out why some files got lumped into 1980
-#TODO: can i suppress error logging from the metadata extraction?
+from __future__ import print_function
 
 import argparse
 import fnmatch
@@ -24,7 +21,10 @@ from hachoir_core.cmd_line import unicodeFilename
 from hachoir_parser import createParser
 from hachoir_core.tools import makePrintable
 from hachoir_metadata import extractMetadata
+import hachoir_core.config
 
+# Suppress metadata parse warnings
+hachoir_core.config.quiet=True
 
 UNKNOWN_PARTITION=0
 DEFAULT_MIN_SIZE_KB=1
@@ -36,10 +36,13 @@ EST_MAX_FILES_PER_YEAR=50000
 
 _start_time = datetime.datetime.now().isoformat()
 
+ERROR_LOG_FILE = 'partition_error_%s.log' % _start_time
+CMD_LOG_FILE = 'partition_command_%s.log' % _start_time
+
 _formatter = logging.Formatter('[%(levelname)s] %(asctime)s - %(message)s')
 _log_console_handler = logging.StreamHandler(stream=sys.stderr)
 _log_console_handler.setFormatter(_formatter)
-_log_file_handler = logging.FileHandler('partition_error_%s.log' % _start_time, mode='w')
+_log_file_handler = logging.FileHandler(ERROR_LOG_FILE, mode='w')
 _log_file_handler.setFormatter(_formatter)
 
 LOG = logging.getLogger(sys.argv[0])
@@ -47,7 +50,7 @@ LOG.setLevel(logging.ERROR)
 LOG.addHandler(_log_console_handler)
 LOG.addHandler(_log_file_handler)
 
-_cmd_handler = logging.FileHandler('partition_command_%s.log' % _start_time, mode='w')
+_cmd_handler = logging.FileHandler(CMD_LOG_FILE, mode='w')
 _cmd_handler.setFormatter(logging.Formatter('%(message)s'))
 
 CMD_LOG = logging.getLogger('partition_command_log')
@@ -55,10 +58,60 @@ CMD_LOG.setLevel(logging.INFO)
 CMD_LOG.addHandler(_cmd_handler)
 
 
+class RunStatistics:
 
+    def __init__(self, total_files):
+        self.total_files = total_files
+        self.partitioned_by={}
+        self.partition_counts={}
+        self.type_counts={}
+        self.success=0
+        self.failure=0
+        
+    def count_success(self, num_items=1):
+        self.success += num_items
 
+    def count_failure(self, num_items=1):
+        self.failure += num_items
+
+    @staticmethod
+    def _map_count(map_obj, k, num_items=1):
+        if k in map_obj:
+            map_obj[k] += num_items
+        else:
+            map_obj[k] = num_items
+
+    def count_type(self, file_type, num_items=1):
+        RunStatistics._map_count(self.type_counts, file_type.upper(), num_items)
+            
+    def count_partition_method(self, partition_method, num_items=1):
+        RunStatistics._map_count(self.partitioned_by, partition_method, num_items)
+
+    def count_partition(self, partition_id, num_items=1):
+        RunStatistics._map_count(self.partition_counts, partition_id, num_items)        
+        
+    def print_summary(self, stream=sys.stdout):
+        sprint = lambda x='': print(x, file=stream) 
+        sprint('Summary statistics for run %s' % _start_time)
+        sprint('  Total files: %d' % self.total_files)
+        sprint('  Successful files: %d' % self.success)
+        sprint('  Failed files: %d' % self.failure)
+        if self.success > 0:
+            sprint('  Count by partition method:')
+            for k in self.partitioned_by:
+                sprint('    %s: %d' % (k, self.partitioned_by[k]))
+            sprint('  Count by partition:')
+            for k in self.partition_counts:
+                sprint('    %s: %d' % (k, self.partition_counts[k]))
+            sprint('  Count by file type:')
+            for k in self.type_counts:
+                sprint('    %s: %d' % (k, self.type_counts[k]))
+        sprint()    
+        sprint('  File system command logs in %s' % CMD_LOG_FILE)
+        sprint('  Error logs in %s' % CMD_LOG_FILE)    
+        sprint()
+        
 def _read_exif_hachoir(file_name):
-
     try:
 
         filename, realname = unicodeFilename(file_name), file_name
@@ -100,9 +153,8 @@ class Partition:
     partitions = {}
     created_dirs = set()
     
-    def __init__(self, partition_id, src_dir, dest_dir, log_file, dry_run, flatten):
+    def __init__(self, partition_id, src_dir, dest_dir, dry_run, flatten):
         self.partition_id = partition_id
-        self.log_file = log_file
         self.src_dir = src_dir
         self.dest_dir = dest_dir
         self.dest_bloom = BloomFilter(max_elements=EST_MAX_FILES_PER_YEAR)
@@ -146,34 +198,40 @@ class Partition:
                 
             shutil.copy2(file_name, dest_file_name)
             
-        CMD_LOG.info('Partition %s, cp %s %s' % (self.partition_id, file_name, dest_file_name))
+        CMD_LOG.info('Partition %s\tcp %s %s' % (self.partition_id, file_name, dest_file_name))
 
         
     @staticmethod
-    def _get_partition(file_name):
+    def _get_partition(file_name, run_stats):
         exif = _read_exif_hachoir(file_name)
         if 'creation_date' in exif:
             p = _parse_exif_year(exif['creation_date'])
             if p:
+                run_stats.count_partition_method('exif')
                 return p
 
         path_year = _parse_filename_year(file_name)
         if path_year:
+            run_stats.count_partition_method('path')
             return path_year
-                
+
+        run_stats.count_partition_method('unknown')
         return UNKNOWN_PARTITION
     
     @staticmethod
-    def handle_file(file_name, src_dir, dest_dir, log_file, dry_run, flatten):
+    def handle_file(file_name, src_dir, dest_dir, dry_run, flatten, run_stats):
 
-        part = Partition._get_partition(file_name)
-
+        part = Partition._get_partition(file_name, run_stats)
+        
         # if first time, do partition set-up
         if part not in Partition.partitions:
-            Partition.partitions[part] = Partition(part, src_dir, dest_dir, log_file, dry_run, flatten)
+            Partition.partitions[part] = Partition(part, src_dir, dest_dir, dry_run, flatten)
 
         Partition.partitions[part]._ingest(file_name)
 
+        base, ext = os.path.splitext(file_name)
+        run_stats.count_type(ext)
+        run_stats.count_partition(part)
 
 def _file_size_cmp(path, min_kb):
     sz = os.stat(path).st_size
@@ -238,17 +296,20 @@ def _get_args():
     return args
 
 
-def _parallel_task(work_queue, progress, args):
+def _parallel_task(work_queue, progress, args, run_stats):
 
     while True:
         try:
             src_file = work_queue.get(True, QUEUE_TIMEOUT_SEC)
-            Partition.handle_file(src_file, args.src_dir, args.dest_dir, 'some_log_file_thing', \
-                             not args.no_dry_run, args.flatten_subdirectories)
+            Partition.handle_file(src_file, args.src_dir, args.dest_dir, \
+                                  not args.no_dry_run, args.flatten_subdirectories, run_stats)
+
+            run_stats.count_success()
         except Queue.Empty:
             LOG.error("No more files to process. Exiting.")
         except:
             LOG.exception("Unexpected error processing file %s: %s", src_file, sys.exc_info()[0])
+            run_stats.count_failure()
         finally:
             work_queue.task_done()
             
@@ -270,10 +331,12 @@ def main_func():
         total_files += 1
 
     progress_bar = tqdm(total=total_files, unit='Files', unit_scale=True)    
-        
+
+    run_stats = RunStatistics(total_files)
+    
     work_queue = Queue.Queue(WORK_BUFFER_SIZE)
     for i in range(args.num_workers):
-        t = Thread(target=lambda: _parallel_task(work_queue, progress_bar, args))
+        t = Thread(target=lambda: _parallel_task(work_queue, progress_bar, args, run_stats))
         t.daemon = True
         t.start()
         
@@ -282,7 +345,10 @@ def main_func():
     for p in paths:
         work_queue.put(p)
 
-    work_queue.join()   
+    work_queue.join()
+
+    progress_bar.clear()
+    run_stats.print_summary()
     
             
 if __name__ == '__main__':
