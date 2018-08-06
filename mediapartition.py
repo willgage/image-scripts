@@ -108,7 +108,7 @@ class RunStatistics:
                 sprint('    %s: %d' % (k, self.type_counts[k]))
         sprint()    
         sprint('  File system command logs in %s' % CMD_LOG_FILE)
-        sprint('  Error logs in %s' % CMD_LOG_FILE)    
+        sprint('  Error logs in %s' % ERROR_LOG_FILE)    
         sprint()
         
 def _read_exif_hachoir(file_name):
@@ -318,7 +318,7 @@ def _parallel_task(work_queue, progress, args, run_stats):
             progress.set_postfix(file=unicodeFilename(os.path.basename(src_file)), refresh=False)
             progress.update(1)
         except:
-            LOG.exception("Error updating progress bar: %s", sys.exc_info()[0])
+            LOG.exception("Error updating progress bar for source file %s: %s", src_file, sys.exc_info()[0])
             
 def main_func():
 
@@ -352,5 +352,4 @@ def main_func():
     
             
 if __name__ == '__main__':
-
     main_func()
