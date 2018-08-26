@@ -1,3 +1,7 @@
+# Copyright (c) 2018 William Gage
+# This code is licensed under the terms of the MIT License
+# See LICENSE file for more details
+
 from __future__ import print_function
 
 import argparse
